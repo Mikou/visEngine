@@ -114,7 +114,8 @@ function parseTemplate () {
   var properties = [];
   var template = {
     type:'template',
-    properties: [],
+    //properties: [],
+    properties: {},
     entities: {},
     children: {},
     entitiesReady:false,
@@ -128,7 +129,8 @@ function parseTemplate () {
       template.visComponent = property.key;
       template.name = property.formula.value;
     } else {
-      template.properties.push(property);
+      //template.properties.push(property);
+      template.properties[property.key] = property;
     }
     if(!ts.eof()) skip_EOL();
   }

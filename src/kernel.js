@@ -122,16 +122,29 @@ var getVismForm = function (vismfile) {
 
 var preInterpret = function (exp, vismform, visform, template, lookupCols) {
 
-  var findParent = function (ref, visform) {
+  var findParent = function (ref, templates) {
     // TODO: lookup in children foreach template
-    for(var i=0, len=visform.template.length; i<len; i++) {
-      if(visform.template[i].name === ref) return visform.template[i];
+
+
+    for(var template in templates) {
+
+      if(template === ref) return templates[template];
+      if(Object.keys(templates[template].children) > 0) {
+        findParent(ref, templates[template].children);
+      }
     }
+
+    return null;
+
+    //for(var i=0, len=visform.template.length; i<len; i++) {
+    //  if(visform.template[i].name === ref) return visform.template[i];
+    //}
   }
 
   switch(exp.type) {
     case 'binary':
       preInterpret(exp.left, vismform, visform, template);
+      if(exp.operator === 'WHERE') template.entitiesReady = true;
       preInterpret(exp.right, vismform, visform, template);
       break;
 
@@ -171,48 +184,37 @@ var preInterpret = function (exp, vismform, visform, template, lookupCols) {
 
       if(exp.value === 'Map') return function (path) {
 
-          var entityRef = preInterpret(path.next(), vismform, visform, template, service);
-          console.log(visform.templateTreeReady);
-          if(!visform.templateTreeReady) {
-            template.entities[entityRef] = vismform.entities[entityRef];
-          } else {
-
-            if(path.hasNext()) {
-              var propName = preInterpret(path.next(), vismform, visform, template, service);
-              //var entity=template.entities[propName];
-              console.log(entityRef, template.entities, propName);
-              //entity.properties[preInterpret(path.next(), vismform, visform, template, service)].candidate=true;
-            }
+        var entityRef = preInterpret(path.next(), vismform, visform, template, service);
+        
+        if(!template.entitiesReady) {
+          template.entities[entityRef] = vismform.entities[entityRef];
+        } else {
+          if(path.hasNext()) {
+            var propName = preInterpret(path.next(), vismform, visform, template, service);
+            var entity=template.entities[entityRef].properties[propName];
+            entity.candidate = true;
           }
         }
+      }
       
       if(exp.value === 'Form') return function (path) {
-          if(!template.entitiesReady) {
-            var parent = findParent(preInterpret(path.next(), vismform, visform, template), visform);
-            /*var parent = {
-              entitiesReady:false,
-              name: template.parentRef,
-              type: undefined,
-              properties: undefined,
-              children: {},
-              //children[template.name]: template,
-              entities: {}
-            };*/
-            template.parentRef = parent.name;
-            parent.children[template.name] = template;
-            //parent.children[template.name] = template;
-          } else {
-            
-          }
+        if(!template.entitiesReady) {
+          var parentRef = preInterpret(path.next(), vismform, visform, template);
+          var parent = findParent(parentRef, visform.templateTree);
+          template.parentRef = parent.name;
+          parent.children[template.name] = template;
+        } else {
+          
         }
+      }
 
       if(exp.value === 'Parent') return function (path) {
-          var parent = findParent(template.parentRef);
-          var propertyRef = preInterpret(path.next(), vismform, visform, template);
-          var parentProp = parent.properties[propertyRef];
-          if(typeof parentProp === 'undefined') 
-            throw new Error("The requested property "+ propertyRef +" does not exist in the parent template " + parent.name);
-        }
+        var parent = findParent(template.parentRef, visform.templateTree);
+        var propertyRef = preInterpret(path.next(), vismform, visform, template);
+        var parentProp = parent.properties[propertyRef];
+        if(typeof parentProp === 'undefined') 
+          throw new Error("The requested property "+ propertyRef +" does not exist in the parent template " + parent.name);
+      }
 
       return exp.value;
   }
@@ -229,6 +231,7 @@ var createTemplateTree = function (vismform, visform) {
     if(!visform.template[i].parentRef)
       visform.templateTree[template.name] = template;
   }
+  visform.templateTreeReady = true;
 }
 
 var getVisForm = function (visfile, vismform) {
@@ -252,27 +255,28 @@ var getVisForm = function (visfile, vismform) {
     visform.template = visParser.parseVisformTemplate();
     createTemplateTree(vismform, visform);
 
-
-    visform.templateTreeReady = true;
-
     var preDef = function (templates) {
 
-      for(var template in templates) {
+      for(var templateRef in templates) {
 
-        console.log(templates[template]);
+        var template = templates[templateRef];
 
-        for(var i=0, len=templates[template].properties.length; i<len; i++) {
-          preInterpret(templates[template].properties[i], vismform, visform, templates[template]);
+        for(var propertyRef in template.properties) {
+          var property = template.properties[propertyRef];
+
+          preInterpret(property.formula, vismform, visform, template);
         }
 
-        if(Object.keys(templates[template].children) > 0);
-          preDef(templates[template].children);
+        if(Object.keys(template.children) > 0);
+          preDef(template.children);
         
       }
 
     }
 
     preDef(visform.templateTree);
+
+    console.log("templateTree:", visform.templateTree);
 
     /*for(var i=0, len< Object.keys(visform.templateTree).length; i<len; i++) {
       console.log(i);
