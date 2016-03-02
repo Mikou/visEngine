@@ -82,17 +82,22 @@ var getEntity = function (template, schema) {
 };
 
 var getVisComponent = function (componentName) {
-  return new Promise(function(resolve, reject) {
-
-    if(componentName === 'TextBox') {
-      setTimeout(function() { resolve({type:'textBox'})}, 100);
-    } else {
-      setTimeout(function() { resolve({type:'Box'})}, 500);
-
-    }
-
-  });
+  if(componentName === 'TextBox') {
+    return {
+      type:"TextBox",
+      properties: {
+        Top: {genericValue: 10},
+        Left: {genericValue: 10},
+        Text: {genericValue: "My Empty TextBox"}
+      }
+    };
+  } else {
+    return {
+      type:"Box"
+    };
+  }
 }
+
 
 var getVismForm = function (vismfile) {
   return new Promise(function (resolve, reject) {
@@ -260,14 +265,16 @@ var getVisForm = function (visfile, vismform) {
       for(var templateRef in templates) {
 
         var template = templates[templateRef];
+        template.visComponent = getVisComponent(template.visComponent);
 
         for(var propertyRef in template.properties) {
+          if(typeof template.visComponent.properties[propertyRef] === 'undefined')
+            throw new Error("The visComponent does not contain a definition for key " + propertyRef);
           var property = template.properties[propertyRef];
-
           preInterpret(property.formula, vismform, visform, template);
         }
 
-        if(Object.keys(template.children) > 0);
+        if(Object.keys(template.children) > 0)
           preDef(template.children);
         
       }
