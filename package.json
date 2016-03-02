@@ -1,0 +1,21 @@
+{
+  "name": "uvis",
+  "title": "visTool",
+  "version": "1.0.0",
+  "description": "visTool, a data-visualisation tool",
+  "port": 3000,
+  "buildPath": "build/",
+  "main": "kernel.js",
+  "scripts": {
+    "build-js": "node buildUtil/makeBuild",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "moment": "^2.11.2"
+  },
+  "devDependencies": {
+    "browserify": "^13.0.0"
+  }
+}
