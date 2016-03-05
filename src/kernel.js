@@ -64,6 +64,7 @@ var getEntity = function (template, schema) {
   var entity = {
     type: 'entity',
     name: template.Table,
+    candidate: false,
     properties: {}
   };
   var entityType = getEntityType(entitySet.entityType);
@@ -113,7 +114,9 @@ var getVismForm = function (vismfile) {
       limitedRows: template.LimitedRows,
       entities : {}
     };
-    getSchema(vismParser.next()).then(function (schema) {
+    var dbTemplate = vismParser.next();
+    VismForm.oDataURI = dbTemplate.Database;
+    getSchema(dbTemplate).then(function (schema) {
       while(!vismParser.eof()) {
         var entity = getEntity(vismParser.next(), schema);
         VismForm.entities[entity.name] = entity;
@@ -188,15 +191,15 @@ var preInterpret = function (exp, vismform, visform, template, lookupCols) {
     case 'id':
 
       if(exp.value === 'Map') return function (path) {
-
         var entityRef = preInterpret(path.next(), vismform, visform, template, service);
-        
+        console.log(template.entitiesReady);
         if(!template.entitiesReady) {
           template.entities[entityRef] = vismform.entities[entityRef];
         } else {
           if(path.hasNext()) {
             var propName = preInterpret(path.next(), vismform, visform, template, service);
             var entity=template.entities[entityRef].properties[propName];
+            console.log("---->", entityRef, propName);
             entity.candidate = true;
           }
         }
@@ -228,7 +231,6 @@ var preInterpret = function (exp, vismform, visform, template, lookupCols) {
 }
 
 var createTemplateTree = function (vismform, visform) {
-  visform.templateTreeReady = false;
   visform.templateTree = {};
   for(var i=0, len=visform.template.length; i<len; i++) {
     var template = visform.template[i];
@@ -236,7 +238,6 @@ var createTemplateTree = function (vismform, visform) {
     if(!visform.template[i].parentRef)
       visform.templateTree[template.name] = template;
   }
-  visform.templateTreeReady = true;
 }
 
 var getVisForm = function (visfile, vismform) {
@@ -252,136 +253,197 @@ var getVisForm = function (visfile, vismform) {
       template: undefined,
       templateTree: undefined
     };
-    //var Environment = require('./environment');
-    //var env = new Environment(null);
-
-    var promises = [];
-
     visform.template = visParser.parseVisformTemplate();
     createTemplateTree(vismform, visform);
 
-    var preDef = function (templates) {
+    var traverseTree = function (templates) {
 
       for(var templateRef in templates) {
 
         var template = templates[templateRef];
         template.visComponent = getVisComponent(template.visComponent);
 
+        template.entitiesReady = true;
         for(var propertyRef in template.properties) {
           if(typeof template.visComponent.properties[propertyRef] === 'undefined')
             throw new Error("The visComponent does not contain a definition for key " + propertyRef);
           var property = template.properties[propertyRef];
+          if(property.key === 'Text') console.log("TEXT: -----------------");
           preInterpret(property.formula, vismform, visform, template);
         }
 
-        if(Object.keys(template.children) > 0)
-          preDef(template.children);
+        if(Object.keys(template.children).length > 0)
+          traverseTree(template.children);
         
       }
 
     }
 
-    preDef(visform.templateTree);
+    traverseTree(visform.templateTree);
 
-    console.log("templateTree:", visform.templateTree);
-
-    /*for(var i=0, len< Object.keys(visform.templateTree).length; i<len; i++) {
-      console.log(i);
-    }*/
-    /*function createTemplate(input) {
-      promises.push(new Promise(function(resolve, reject) {
-        
-        getVisComponent(input.properties[0].key).then(function(visComponent) {
-
-          var template = {
-            entitiesReady:false,
-            name: input.properties[0].formula.value,
-            type: visComponent,
-            properties: {},
-            children: {},
-            entities: {}
-          }
-
-          // (1) preInterpret ROWS
-          try {
-            preInterpret(input.properties[1].formula, vismform, visform, template);
-          } catch (e) {
-            reject(e);
-          }
-          template.entitiesReady = true;
-          
-          // (2) preInterpret all other properties
-          for(var i=2, len=input.properties.length; i<len; i++) {
-            try {
-              template.properties[input.properties[i].key] =input.properties[i].formula;
-              preInterpret(input.properties[i].formula, vismform, visform, template);
-            } catch (e) {
-              reject(e);
-            }
-          }
-          if(!template.parentRef) {
-            console.log(visform.templates);
-            visform.templates[template.name] = template;
-          }
-
-          resolve(visform);
-
-        });
-
-      }));
-    }
-
-
-    while(!visParser.eof()) {
-      createTemplate(visParser.next());
-    }
-
-    Promise.all(promises).then(function (visform) {
-      resolve(visform);
-    })
-    /*while(!visParser.eof()) {
-        console.log(count++);
-        var template = {
-          entitiesReady:false,
-          name: visParser.peek().properties[0].formula.value,
-          type: visParser.peek().properties[0].key,
-          properties: {},
-          children: {},
-          entities: {}
-        }
-
-        //env.def("vismform", vismform);
-        //env.def("visform",  visform );
-        //env.def("template", template);
-        //env.def("service" , null    );
-
-        // (1) preInterpret ROWS
-        try {
-          preInterpret(visParser.peek().properties[1].formula, vismform, visform, template);
-        } catch (e) {
-          console.log(e);
-        }
-        template.entitiesReady = true;
-        
-        // (2) preInterpret all other properties
-        for(var i=2, len=visParser.peek().properties.length; i<len; i++) {
-          try {
-            template.properties[visParser.peek().properties[i].key] =visParser.peek().properties[i].formula;
-            preInterpret(visParser.peek().properties[i].formula, vismform, visform, template);
-          } catch (e) {
-            console.log(e);
-          }
-
-        }
-        if(!template.parentRef)
-          visform.templates[template.name] = template;
-
-        visParser.next();
+    /*visform.render = function () {
+      return new Promise(function(resolve, reject) {
+        resolve('<div id="">canvas</div>');
+      });
     }*/
 
-    //reject(visfile);
+    resolve(visform);
+
   });
 };
+
+var evaluate = function (exp, vismform, visform, template, instance) {
+  switch(exp.type) {
+    case 'binary':
+      var L = evaluate(exp.left, vismform, visform, template, instance);
+      var R = evaluate(exp.right, vismform, visform, template, instance);
+      return L+R;
+
+    case 'path':
+      var service;
+      var pathReader = function (path) {
+        var pos = 0;
+
+        function hasNext() {
+          return (typeof path[pos] !== 'undefined');
+        }
+
+        function next() {
+          return hasNext() ? path[pos++] : null;
+        }
+
+        function peek() {
+          return path[pos] || null;
+        }
+
+        return {
+          hasNext: hasNext,
+          next: next,
+          peek: peek
+        }
+      }
+
+      var path = pathReader(exp.path);
+      var fn = evaluate(path.next(), vismform, visform, template, instance);
+      return fn(path);
+      break;
+
+    case 'id':
+      if(exp.value === 'Map') return function (path) {
+        var entityRef = evaluate(path.next(), vismform, visform, template, instance);
+        var entity = template.entities[entityRef];
+        if(path.hasNext()) {
+          var propRef = evaluate(path.next(), vismform, visform, template, instance);
+          return instance.data[propRef];
+          console.log(entityRef+"."+propRef, entity.properties[propRef]);
+        } else {
+        }
+      }
+
+      if(exp.value === 'Form') return function (path) {
+        console.log('Form:', path.next());
+      }
+
+      if(exp.value === 'Parent') return function (path) {
+        console.log('Parent:', path.next());
+      }
+
+      if(exp.value === 'index') {
+        console.log("INDEX::::", instance);
+        return instance.index;
+      }
+
+      return exp.value;
+  
+    case 'num':
+      return exp.value;
+  };
+}
+
+var allocate = function (visform, vismform) {
+
+  return new Promise(function(resolve, reject) {
+
+    var odata = require('./oDataQueryBuilder');
+
+    var svc = odata.service(vismform.oDataURI, 'json');
+    var queue = [];
+
+    var traverseTree = function (templates) {
+      for(var templateRef in templates) {
+        var resource= "";
+        var properties = [];
+
+        var template = templates[templateRef];
+        for(var entityRef in template.entities) {
+          var entity = template.entities[entityRef];
+          resource = entity.name;
+          for(var propertyRef in entity.properties) {
+            var property = entity.properties[propertyRef];
+            if(property.candidate || property.isPkey) properties.push(propertyRef);
+          }
+        }
+        var queryURI = svc.resource(resource).select(properties).toString();
+        
+        queue.push(new Promise(function(resolve, reject) {
+            var xhr = new XMLHttpRequest();
+            var templateRef = template.name;
+
+            xhr.onreadystatechange = function() {
+              if (xhr.readyState == 4 && xhr.status == 200) {
+                console.log(templateRef);
+                resolve({templateRef: templateRef, data:JSON.parse(xhr.responseText)});
+              }
+            }
+
+            xhr.open("GET", queryURI);
+            xhr.send();
+          })
+        );
+
+        if(Object.keys(template.children).length > 0)
+          traverseTree(template.children);
+      }
+    }
+
+    traverseTree(visform.templateTree);
+
+    Promise.all(queue).then(function(instancesSet) {
+      visform.instancesSet = instancesSet;
+      resolve(visform);
+    });
+
+  });
+}
+
+var render = function (visform, vismform) {
+
+  var getInstances = function (templateName) {
+    for(var i=0, len=visform.instancesSet.length; i<len; i++) {
+      var instances = visform.instancesSet[i];
+      if(templateName === instances.templateRef) return instances;
+    }
+  }
+
+  var evaluateTree = function (tplTree) {
+
+    for(templateRef in tplTree) {
+      var template = tplTree[templateRef];
+      var instances = getInstances(template.name).data.value;
+      console.log("template:", template.name, "instances:", instances);
+      for(var i=0, len=instances.length; i<len; i++) {
+        var instance={index:i, data:instances[i]};
+        for(property in template.properties) {
+          console.log("  Property: ", template.properties[property].key, evaluate(template.properties[property].formula, vismform, visform, template, instance));
+        }
+      }
+    }
+
+  }
+
+  evaluateTree(visform.templateTree);
+
+}
 
 var getVismFile = function (vismfileRef) {
 
@@ -392,7 +454,7 @@ var getVismFile = function (vismfileRef) {
     }).then(function (vismform) {
       return getVisFile(vismform);
     }).then(function (canvas) {
-      resolve("<div>canvas</div>");
+      resolve(canvas);
     }).catch(function (err) {
       reject(err);
     });
@@ -405,9 +467,10 @@ var getVisFile = function (vismform) {
   return new Promise(function (resolve, reject) {
     getFile(vismform.startUpForm).then (function (visfile) {
       return getVisForm(visfile, vismform);
+    }).then(function (visform) {
+      return allocate(visform, vismform);
     }).then(function(visform) {
-      console.log(visform);
-      resolve(visform);
+      render(visform, vismform);
     }).catch(function (err) {
       reject(err);
     });
@@ -426,6 +489,7 @@ Kernel.run = function (vismfileRef) {
     throw new Error("The visEngine expects a file provider");
   getVismFile(vismfileRef).then(function (canvas) {
     console.log("done", canvas);
+    
   }).catch(function (err) {
     console.log(err);
   });
