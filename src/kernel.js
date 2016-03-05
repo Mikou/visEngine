@@ -87,10 +87,24 @@ var getVisComponent = function (componentName) {
     return {
       type:"TextBox",
       properties: {
-        Top: {genericValue: 10},
-        Left: {genericValue: 10},
-        Text: {genericValue: "My Empty TextBox"}
+        Top: {genericValue: 10, computedValue: undefined, getValue: function () {
+          return (typeof this.computedValue === 'undefined') 
+                  ? this.genericValue : this.computedValue;
+        }},
+        Left: {genericValue: 10, computedValue: undefined, getValue: function () {
+          return (typeof this.computedValue === 'undefined') 
+                  ? this.genericValue : this.computedValue;
+        }},
+        Text: {genericValue: 'My Empty TextBox', computedValue: undefined, getValue: function () {
+          return (typeof this.computedValue === 'undefined') 
+                  ? this.genericValue : this.computedValue;
+        }}
+      },
+      toHTML: function () {
+        console.log(this);
+        return '<div id="" style="top:'+this.properties['Top'].getValue()+'px;left:'+this.properties['Left'].getValue()+'px;">'+this.properties['Text'].getValue()+'</div>';
       }
+
     };
   } else {
     return {
@@ -137,7 +151,7 @@ var preInterpret = function (exp, vismform, visform, template, lookupCols) {
     for(var template in templates) {
 
       if(template === ref) return templates[template];
-      if(Object.keys(templates[template].children) > 0) {
+      if(Object.keys(templates[template].children).length > 0) {
         findParent(ref, templates[template].children);
       }
     }
@@ -199,7 +213,6 @@ var preInterpret = function (exp, vismform, visform, template, lookupCols) {
           if(path.hasNext()) {
             var propName = preInterpret(path.next(), vismform, visform, template, service);
             var entity=template.entities[entityRef].properties[propName];
-            console.log("---->", entityRef, propName);
             entity.candidate = true;
           }
         }
@@ -268,7 +281,6 @@ var getVisForm = function (visfile, vismform) {
           if(typeof template.visComponent.properties[propertyRef] === 'undefined')
             throw new Error("The visComponent does not contain a definition for key " + propertyRef);
           var property = template.properties[propertyRef];
-          if(property.key === 'Text') console.log("TEXT: -----------------");
           preInterpret(property.formula, vismform, visform, template);
         }
 
@@ -291,74 +303,6 @@ var getVisForm = function (visfile, vismform) {
 
   });
 };
-
-var evaluate = function (exp, vismform, visform, template, instance) {
-  switch(exp.type) {
-    case 'binary':
-      var L = evaluate(exp.left, vismform, visform, template, instance);
-      var R = evaluate(exp.right, vismform, visform, template, instance);
-      return L+R;
-
-    case 'path':
-      var service;
-      var pathReader = function (path) {
-        var pos = 0;
-
-        function hasNext() {
-          return (typeof path[pos] !== 'undefined');
-        }
-
-        function next() {
-          return hasNext() ? path[pos++] : null;
-        }
-
-        function peek() {
-          return path[pos] || null;
-        }
-
-        return {
-          hasNext: hasNext,
-          next: next,
-          peek: peek
-        }
-      }
-
-      var path = pathReader(exp.path);
-      var fn = evaluate(path.next(), vismform, visform, template, instance);
-      return fn(path);
-      break;
-
-    case 'id':
-      if(exp.value === 'Map') return function (path) {
-        var entityRef = evaluate(path.next(), vismform, visform, template, instance);
-        var entity = template.entities[entityRef];
-        if(path.hasNext()) {
-          var propRef = evaluate(path.next(), vismform, visform, template, instance);
-          return instance.data[propRef];
-          console.log(entityRef+"."+propRef, entity.properties[propRef]);
-        } else {
-        }
-      }
-
-      if(exp.value === 'Form') return function (path) {
-        console.log('Form:', path.next());
-      }
-
-      if(exp.value === 'Parent') return function (path) {
-        console.log('Parent:', path.next());
-      }
-
-      if(exp.value === 'index') {
-        console.log("INDEX::::", instance);
-        return instance.index;
-      }
-
-      return exp.value;
-  
-    case 'num':
-      return exp.value;
-  };
-}
 
 var allocate = function (visform, vismform) {
 
@@ -416,7 +360,140 @@ var allocate = function (visform, vismform) {
   });
 }
 
+var evaluate = function (exp, vismform, visform, template, instance) {
+  var getInstances = function (templateName) {
+    for(var i=0, len=visform.instancesSet.length; i<len; i++) {
+      var instances = visform.instancesSet[i];
+      if(templateName === instances.templateRef) return instances;
+    }
+  }
+
+  var findParent = function (ref, templates) {
+    // TODO: lookup in children foreach template
+
+    for(var template in templates) {
+      if(template === ref) return templates[template];
+      if(Object.keys(templates[template].children).length > 0) {
+        findParent(ref, templates[template].children);
+      }
+    }
+    return null;
+  }
+
+  var applyOp = function (op, a, b) {
+    function num (x) {
+      if(typeof x != 'number') 
+        throw new Error("Expected number but got", +x);
+      return x;
+    }
+
+    function div (x) {
+      if(num(x) == 0)
+        throw new Error("Divide by zero");
+    }
+
+    switch (op) {
+      case "+"  : return num(a) + num(b);
+      case "-"  : return num(a) - num(b);
+      case "*"  : return num(a) * num(b);
+      case "/"  : return num(a) / div(b);
+      case "%"  : return num(a) % div(b);
+      case "&&" : return a !== false && b;
+      case "||" : return a !== false ? a : b;
+      case "<"  : return num(a) < num(b);
+      case ">"  : return num(a) > num(b);
+      case "<=" : return num(a) <= num(b);
+      case ">=" : return num(a) >= num(b);
+      case "==" : return a === b;
+      case "!=" : return a !== b;
+    }
+    throw new Error("Can't apply operator " + op);
+  }
+
+  switch(exp.type) {
+    case 'binary':
+      var L = evaluate(exp.left, vismform, visform, template, instance);
+      var R = evaluate(exp.right, vismform, visform, template, instance);
+      return applyOp(exp.operator, L, R);
+
+    case 'path':
+      var service;
+      var pathReader = function (path) {
+        var pos = 0;
+
+        function hasNext() {
+          return (typeof path[pos] !== 'undefined');
+        }
+
+        function next() {
+          return hasNext() ? path[pos++] : null;
+        }
+
+        function peek() {
+          return path[pos] || null;
+        }
+
+        return {
+          hasNext: hasNext,
+          next: next,
+          peek: peek
+        }
+      }
+
+      var path = pathReader(exp.path);
+      var fn = evaluate(path.next(), vismform, visform, template, instance);
+      return fn(path);
+      break;
+
+    case 'id':
+      if(exp.value === 'Map') return function (path) {
+        var entityRef = evaluate(path.next(), vismform, visform, template, instance);
+        var entity = template.entities[entityRef];
+        if(path.hasNext()) {
+          var propRef = evaluate(path.next(), vismform, visform, template, instance);
+          return instance.data[propRef];
+          console.log(entityRef+"."+propRef, entity.properties[propRef]);
+        } else {
+        }
+      }
+
+      if(exp.value === 'Form') return function (path) {
+        console.log('Form:', path.next());
+      }
+
+      if(exp.value === 'Parent') return function (path) {
+        var parent = findParent(template.parentRef, visform.templateTree);
+        var nextPathComponent = evaluate(path.next(), vismform, visform, template, instance);
+        property = parent.properties[nextPathComponent];
+        var componentProp = parent.bundle[instance.index].properties[property.key];
+        return componentProp.computedValue || computedProp.genericValue;
+      }
+
+      if(exp.value === 'index') {
+        return instance.index;
+      }
+
+      return exp.value;
+  
+    case 'num':
+      return exp.value;
+  };
+}
+
 var render = function (visform, vismform) {
+
+  var clone = function (obj) {
+    var copy;
+
+    if (null == obj || "object" != typeof obj) return obj;
+    if (obj instanceof Object) {
+      copy = {};
+      for (var attr in obj) {
+          if (obj.hasOwnProperty(attr)) copy[attr] = clone(obj[attr]);
+      }
+      return copy;
+    }
+  }
 
   var getInstances = function (templateName) {
     for(var i=0, len=visform.instancesSet.length; i<len; i++) {
@@ -433,15 +510,36 @@ var render = function (visform, vismform) {
       console.log("template:", template.name, "instances:", instances);
       for(var i=0, len=instances.length; i<len; i++) {
         var instance={index:i, data:instances[i]};
-        for(property in template.properties) {
-          console.log("  Property: ", template.properties[property].key, evaluate(template.properties[property].formula, vismform, visform, template, instance));
+        var visComponent = clone(template.visComponent);
+        for(propertyRef in template.properties) {
+          var templateProp = template.properties[propertyRef];
+          var computedValue = evaluate(templateProp.formula, vismform, visform, template, instance);
+          visComponent.properties[templateProp.key].computedValue = computedValue;
+          console.log("->", computedValue, visComponent.properties['Top'].computedValue);
         }
+        
+        console.log("visComponent:", visComponent);
+        template.bundle.push(visComponent);
+      }
+
+      if(Object.keys(template.children).length > 0) {
+        evaluateTree(template.children);
       }
     }
-
   }
+  evaluateTree(visform.templateTree, null);
 
-  evaluateTree(visform.templateTree);
+  var draw = function (tplTree) {
+    for(templateRef in tplTree) {
+      var template = tplTree[templateRef];
+      console.log("template:", template.name);
+      for(var i=0, len=template.bundle.length; i<len; i++) {
+        console.log(template.bundle[i].toHTML());
+      }
+    }
+  }
+  
+  draw(visform.templateTree);
 
 }
 

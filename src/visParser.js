@@ -113,12 +113,12 @@ function parseProperty () {
 function parseTemplate () {
   var properties = [];
   var template = {
-    type:'template',
-    //properties: [],
-    properties: {},
-    entities: {},
+    bundle:[],
     children: {},
+    entities: {},
     entitiesReady:false,
+    properties: {},
+    type:'template',
     visComponent:undefined
   }
   while(!ts.eof() && ts.peek().type !== 'separator') {
