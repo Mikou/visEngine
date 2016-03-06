@@ -75,6 +75,6 @@
 
   uvis.odatajs = odatajs;
 
-  uvis.run('initial.vism');
+  uvis.run('initial.vism', document.getElementById('uvis'));
 
 })();

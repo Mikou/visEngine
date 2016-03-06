@@ -114,6 +114,7 @@ function parseTemplate () {
   var properties = [];
   var template = {
     bundle:[],
+    query: {},
     children: {},
     entities: {},
     entitiesReady:false,

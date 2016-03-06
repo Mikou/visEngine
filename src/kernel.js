@@ -101,8 +101,12 @@ var getVisComponent = function (componentName) {
         }}
       },
       toHTML: function () {
-        console.log(this);
-        return '<div id="" style="top:'+this.properties['Top'].getValue()+'px;left:'+this.properties['Left'].getValue()+'px;">'+this.properties['Text'].getValue()+'</div>';
+        var elem = document.createElement('div');
+        elem.style.top = this.properties['Top'].getValue();
+        elem.style.left = this.properties['Left'].getValue();
+        elem.textContent = this.properties['Text'].getValue();
+
+        return elem;
       }
 
     };
@@ -304,9 +308,85 @@ var getVisForm = function (visfile, vismform) {
   });
 };
 
+var buildQueryStr = function (URI, query) {
+  
+  var traverse = function (query, expanded) {
+    var queryStr = "";
+    var select = "($select=" + query.properties.toString() + ")";
+    var resource = query.resource;
+
+    if(expanded) {
+      queryStr += "&$expand=";
+    } else {
+      resource += "?";
+    };
+
+    queryStr += resource + "" + select;
+
+    for(var i=0, len=query.expand.length; i<len; i++) {
+      queryStr += traverse(query.expand[i], true);
+    }
+
+    return queryStr;
+  }
+
+  return URI + "" + traverse(query, false) + "&format=json";
+
+}
+
 var allocate = function (visform, vismform) {
 
   return new Promise(function(resolve, reject) {
+
+    var queue = [];
+
+    //TODO : We only look at level 1 of the tree for now
+    var traverseTree = function (templates) {
+      for(var templateRef in templates) {
+        var template = templates[templateRef];
+        
+        queue.push(new Promise(function(resolve, reject) {
+            var xhr = new XMLHttpRequest();
+            var templateRef = template.name;
+
+            xhr.onreadystatechange = function() {
+              if (xhr.readyState == 4 && xhr.status == 200) {
+                resolve({templateRef: templateRef, data:JSON.parse(xhr.responseText)});
+              }
+            }
+
+            console.log(template.queryStr);
+            xhr.open("GET", template.queryStr);
+            xhr.send();
+          })
+        );
+      }
+    }
+
+    traverseTree(visform.templateTree);
+
+    Promise.all(queue).then(function(instancesSet) {
+      visform.instancesSet = instancesSet;
+      console.log(visform);
+      resolve(visform);
+    });
+
+  });
+}
+
+
+var buildQueries = function (visform, vismform) {
+
+    var findParent = function (ref, templates) {
+      for(var template in templates) {
+        if(template === ref) return templates[template];
+        if(Object.keys(templates[template].children).length > 0) {
+          findParent(ref, templates[template].children);
+        }
+      }
+      return null;
+    }
+
 
     var odata = require('./oDataQueryBuilder');
 
@@ -327,37 +407,35 @@ var allocate = function (visform, vismform) {
             if(property.candidate || property.isPkey) properties.push(propertyRef);
           }
         }
+
         var queryURI = svc.resource(resource).select(properties).toString();
+
+        var query = {
+          resource: resource,
+          properties: properties,
+          expand:[]
+        };
+
+        if(template.parentRef) {
+          parent = findParent(template.parentRef, visform.templateTree);
+          parent.query.expand.push(query);
+        } else {
+          template.query = query;
+        }
         
-        queue.push(new Promise(function(resolve, reject) {
-            var xhr = new XMLHttpRequest();
-            var templateRef = template.name;
-
-            xhr.onreadystatechange = function() {
-              if (xhr.readyState == 4 && xhr.status == 200) {
-                console.log(templateRef);
-                resolve({templateRef: templateRef, data:JSON.parse(xhr.responseText)});
-              }
-            }
-
-            xhr.open("GET", queryURI);
-            xhr.send();
-          })
-        );
-
-        if(Object.keys(template.children).length > 0)
+        if(Object.keys(template.children).length > 0) {
           traverseTree(template.children);
-      }
+        }
     }
 
-    traverseTree(visform.templateTree);
+  }
 
-    Promise.all(queue).then(function(instancesSet) {
-      visform.instancesSet = instancesSet;
-      resolve(visform);
-    });
+  traverseTree(visform.templateTree);
 
-  });
+  for(var templateRef in visform.templateTree) {
+    var template = visform.templateTree[templateRef];
+    template.queryStr = buildQueryStr(vismform.oDataURI, template.query);
+  }
 }
 
 var evaluate = function (exp, vismform, visform, template, instance) {
@@ -412,8 +490,8 @@ var evaluate = function (exp, vismform, visform, template, instance) {
 
   switch(exp.type) {
     case 'binary':
-      var L = evaluate(exp.left, vismform, visform, template, instance);
-      var R = evaluate(exp.right, vismform, visform, template, instance);
+      var L = evaluate(exp.left, vismform, visform, template);
+      var R = evaluate(exp.right, vismform, visform, template);
       return applyOp(exp.operator, L, R);
 
     case 'path':
@@ -441,18 +519,17 @@ var evaluate = function (exp, vismform, visform, template, instance) {
       }
 
       var path = pathReader(exp.path);
-      var fn = evaluate(path.next(), vismform, visform, template, instance);
+      var fn = evaluate(path.next(), vismform, visform, template);
       return fn(path);
       break;
 
     case 'id':
       if(exp.value === 'Map') return function (path) {
-        var entityRef = evaluate(path.next(), vismform, visform, template, instance);
+        var entityRef = evaluate(path.next(), vismform, visform, template);
         var entity = template.entities[entityRef];
         if(path.hasNext()) {
-          var propRef = evaluate(path.next(), vismform, visform, template, instance);
-          return instance.data[propRef];
-          console.log(entityRef+"."+propRef, entity.properties[propRef]);
+          var propRef = evaluate(path.next(), vismform, visform, template);
+          return template.row[propRef];
         } else {
         }
       }
@@ -463,14 +540,14 @@ var evaluate = function (exp, vismform, visform, template, instance) {
 
       if(exp.value === 'Parent') return function (path) {
         var parent = findParent(template.parentRef, visform.templateTree);
-        var nextPathComponent = evaluate(path.next(), vismform, visform, template, instance);
+        var nextPathComponent = evaluate(path.next(), vismform, visform, template);
         property = parent.properties[nextPathComponent];
-        var componentProp = parent.bundle[instance.index].properties[property.key];
+        var componentProp = parent.bundle[parent.bundle.length-1].properties[property.key];
         return componentProp.computedValue || computedProp.genericValue;
       }
 
       if(exp.value === 'index') {
-        return instance.index;
+        return template.index;
       }
 
       return exp.value;
@@ -482,6 +559,8 @@ var evaluate = function (exp, vismform, visform, template, instance) {
 
 var render = function (visform, vismform) {
 
+
+  // http://stackoverflow.com/a/728694/971008
   var clone = function (obj) {
     var copy;
 
@@ -495,47 +574,90 @@ var render = function (visform, vismform) {
     }
   }
 
+  var findParent = function (ref, templates) {
+    // TODO: lookup in children foreach template
+
+    for(var template in templates) {
+      if(template === ref) return templates[template];
+      if(Object.keys(templates[template].children).length > 0) {
+        findParent(ref, templates[template].children);
+      }
+    }
+    return null;
+  }
+
+
   var getInstances = function (templateName) {
     for(var i=0, len=visform.instancesSet.length; i<len; i++) {
       var instances = visform.instancesSet[i];
       if(templateName === instances.templateRef) return instances;
     }
+    
   }
 
   var evaluateTree = function (tplTree) {
+    var instances;
 
     for(templateRef in tplTree) {
       var template = tplTree[templateRef];
-      var instances = getInstances(template.name).data.value;
-      console.log("template:", template.name, "instances:", instances);
-      for(var i=0, len=instances.length; i<len; i++) {
-        var instance={index:i, data:instances[i]};
-        var visComponent = clone(template.visComponent);
-        for(propertyRef in template.properties) {
-          var templateProp = template.properties[propertyRef];
-          var computedValue = evaluate(templateProp.formula, vismform, visform, template, instance);
-          visComponent.properties[templateProp.key].computedValue = computedValue;
-          console.log("->", computedValue, visComponent.properties['Top'].computedValue);
+
+      if(template.parentRef) {
+        var parent = findParent(template.parentRef, visform.templateTree);
+        instances = getInstances(template.parentRef);
+        console.log(instances.data.value[parent.index]);
+      } else {
+        instances = getInstances(template.name);
+        for(var i=0, len=instances.data.value.length; i<len; i++) {
+          template.row = instances.data.value[i];
+          template.index = i;
+
+          var visComponent = clone(template.visComponent);
+          for(propertyRef in template.properties) {
+            var templateProp = template.properties[propertyRef];
+            var computedValue = evaluate(templateProp.formula, vismform, visform, template);
+            console.log(computedValue);
+          }
+                   
+ 
         }
-        
-        console.log("visComponent:", visComponent);
-        template.bundle.push(visComponent);
       }
 
-      if(Object.keys(template.children).length > 0) {
-        evaluateTree(template.children);
-      }
+
+      /*if(instances !== null) {
+        var rows = instances.data.value;
+        for(var i=0, len=rows.length; i<len; i++) {
+          var instance={index:i, data:rows[i]};
+          var visComponent = clone(template.visComponent);
+          template.index = i;
+          for(propertyRef in template.properties) {
+            var templateProp = template.properties[propertyRef];
+            var computedValue = evaluate(templateProp.formula, vismform, visform, template, instance);
+            visComponent.properties[templateProp.key].computedValue = computedValue;
+          }
+          if(Object.keys(template.children).length > 0) {
+            evaluateTree(template.children);
+          }
+
+
+          template.bundle.push(visComponent);
+        }
+      }*/
     }
   }
   evaluateTree(visform.templateTree, null);
 
+
   var draw = function (tplTree) {
     for(templateRef in tplTree) {
       var template = tplTree[templateRef];
-      console.log("template:", template.name);
       for(var i=0, len=template.bundle.length; i<len; i++) {
-        console.log(template.bundle[i].toHTML());
+        container.appendChild(template.bundle[i].toHTML()); 
+        if(Object.keys(template.children).length > 0) {
+          draw(template.children);
+        }
+
       }
+
     }
   }
   
@@ -566,9 +688,12 @@ var getVisFile = function (vismform) {
     getFile(vismform.startUpForm).then (function (visfile) {
       return getVisForm(visfile, vismform);
     }).then(function (visform) {
+      buildQueries(visform, vismform);
       return allocate(visform, vismform);
+      //return allocate(visform, vismform);
     }).then(function(visform) {
       render(visform, vismform);
+      console.log(visform);
     }).catch(function (err) {
       reject(err);
     });
@@ -577,12 +702,14 @@ var getVisFile = function (vismform) {
 }
 
 var getFile = undefined;
+var container;
 
 Kernel.registerFileProvider = function (provider) {
   getFile = provider;
 };
 
-Kernel.run = function (vismfileRef) {
+Kernel.run = function (vismfileRef, $container) {
+  container = $container;
   if(typeof getFile!=='function')
     throw new Error("The visEngine expects a file provider");
   getVismFile(vismfileRef).then(function (canvas) {
