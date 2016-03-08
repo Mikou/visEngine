@@ -99,7 +99,7 @@ var getVisComponent = function (componentName) {
                   ? this.genericValue : this.computedValue;
         }}
       },
-      children: {},
+      children: new Array(),
       toHTML: function () {
         var elem = document.createElement('div');
         elem.style.top = this.properties['Top'].getValue();
@@ -530,7 +530,6 @@ var evaluate = function (exp, vismform, visform, template, instance) {
     case 'id':
       if(exp.value === 'Map') return function (path) {
         var entityRef = evaluate(path.next(), vismform, visform, template);
-        //var entity = template.entities[entityRef];
         
         if(!template.entitiesReady) {
           if(!template.parentRef) {
@@ -539,15 +538,9 @@ var evaluate = function (exp, vismform, visform, template, instance) {
             return entityRef;
           }
         } else {
-          if(!template.parentRef) {
-            var entityPropRef = evaluate(path.next(), vismform, visform, template);
-            return template.currentRow[entityPropRef];
-          } else {
-
-          }
-          
+          var entityPropRef = evaluate(path.next(), vismform, visform, template);
+          return template.currentRow[entityPropRef];
         }
-
       }
 
       if(exp.value === 'Form') return function (path) {
@@ -561,8 +554,8 @@ var evaluate = function (exp, vismform, visform, template, instance) {
       if(exp.value === 'Parent') return function (path) {
         var parent = findParent(template.parentRef, visform.templateTree);
         var parentPropertyRef = evaluate(path.next(), vismform, visform, template);
-        var parentBundle = visform.canvas.instanceTree[parent.name];
-        var parentProperty = parentBundle[parent.currentIndex].properties[parentPropertyRef];        
+        var parentProperty = parent.bundle[parent.currentIndex].properties[parentPropertyRef];        
+
         return parentProperty.getValue();
       }
 
@@ -579,8 +572,24 @@ var evaluate = function (exp, vismform, visform, template, instance) {
 
 var render = function (visform, vismform) {
   visform.canvas = {
-    instanceTree: {}
+    instanceTree: {},
   };
+
+  var visform.instanceTree = {};
+
+  function VisComponent(proto) {
+    this.name = proto.name;
+    this.properties = {};
+    for(propRef in proto.properties) {
+      this.properties[propRef] = proto.properties[propRef];
+    }
+    this.children = [];
+  }
+
+  function Tree (proto) {
+    var component = new VisComponent(proto);
+    this._root = component;
+  }
 
   // http://stackoverflow.com/a/728694/971008
   // We do not use a function constructor to instanciate a visComponent with the 'new' keyword
@@ -616,7 +625,6 @@ var render = function (visform, vismform) {
 
   var evaluateFormulas = function (template, visComponent) {
     for(var propertyRef in template.properties) {
-      console.log("---------------------", template.name, propertyRef);
       var property = template.properties[propertyRef];
       var computedValue = evaluate(property.formula, vismform, visform, template);
       visComponent.properties[propertyRef].computedValue = computedValue;
@@ -625,56 +633,47 @@ var render = function (visform, vismform) {
 
   var evaluateTree = function (tplTree) {
     for(templateRef in tplTree) {
+      var bundle;
       var template = tplTree[templateRef];
       // assign instances to template
       template.entitiesReady = false;
       var instances = evaluate(template.rows, vismform, visform, template);
       template.entitiesReady = true;
-      if(!template.parentRef)
-        visform.canvas.instanceTree[template.name] = new Array();
-      var bundle = [];
+
+      if(!template.parentRef) {
+        template.bundle = new Array();
+        bundle = template.bundle;
+      }
 
       for(var i=0, len=instances.length; i<len; i++) {
         var instance = instances[i];
-        console.log(instance);
         var visComponent = clone(template.visComponent);
+        visComponent.children = []; // TODO: quick fix. clone transformed children into an object
         template.currentIndex = i;
         template.currentRow = instance;
-        evaluateFormulas(template, visComponent);
-        //template.bundle.push(visComponent);
 
-        bundle.push(visComponent);
-
-        if(!template.parentRef) {
-          visform.canvas.instanceTree[template.name].push(visComponent);
-        } else {
+        if(template.parentRef) {
           var parent = findParent(template.parentRef, visform.templateTree);
-          var parentBundle = visform.canvas.instanceTree[parent.name];
-          parentBundle[parent.currentIndex].children[template.name] = visComponent;
-          console.log(parentBundle);
+          bundle = parent.bundle[parent.currentIndex].children;
         }
+
+        evaluateFormulas(template, visComponent);
+        bundle.push(visComponent);
         if(Object.keys(template.children).length > 0) {
           evaluateTree(template.children);
         }
-
       }
-
     }
-    if(!template.parentRef) {
-      visform.canvas.instanceTree[template.name] = bundle;
-    } else {
-      var parent = findParent(template.name, visform.templateTree);
-      visform.canvas.instanceTree[parent.name].bundle[parent.instance]
-    }
-    console.log("resulting bundle:", bundle);
   }
   evaluateTree(visform.templateTree, null);
-  console.log(visform);
 
   var draw = function (tplTree) {
     for(templateRef in tplTree) {
       var template = tplTree[templateRef];
       for(var i=0, len=template.bundle.length; i<len; i++) {
+        var bundle = template.bundle[i];
+
+        console.log(bundle);
         container.appendChild(template.bundle[i].toHTML()); 
         if(Object.keys(template.children).length > 0) {
           draw(template.children);
@@ -738,6 +737,7 @@ Kernel.run = function (vismfileRef, $container) {
     
   }).catch(function (err) {
     console.log(err);
+    throw err;
   });
 };
 
